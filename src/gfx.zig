@@ -5,6 +5,93 @@ const heap_alloc = std.heap.c_allocator;
 
 //;
 
+// math
+pub const M3 = [9]f32;
+
+pub const m3 = struct {
+    // column major
+    // m3[x * 3 + y]
+    pub const m_00 = 0 * 3 + 0;
+    pub const m_01 = 0 * 3 + 1;
+    pub const m_02 = 0 * 3 + 2;
+    pub const m_10 = 1 * 3 + 0;
+    pub const m_11 = 1 * 3 + 1;
+    pub const m_12 = 1 * 3 + 2;
+    pub const m_20 = 2 * 3 + 0;
+    pub const m_21 = 2 * 3 + 1;
+    pub const m_22 = 2 * 3 + 2;
+
+    pub fn zero(self: *M3) void {
+        for (self) |*f| {
+            f.* = 0;
+        }
+    }
+
+    pub fn identity(self: *M3) void {
+        zero(self);
+        self[m_00] = 1;
+        self[m_11] = 1;
+        self[m_22] = 1;
+    }
+
+    pub fn translation(self: *M3, x: f32, y: f32) void {
+        identity(self);
+        self[m_20] = x;
+        self[m_21] = y;
+    }
+
+    pub fn rotation(self: *M3, rads: f32) void {
+        identity(self);
+        const rc = std.math.cos(rads);
+        const rs = std.math.sin(rads);
+        self[m_00] = rc;
+        self[m_01] = rs;
+        self[m_10] = -rs;
+        self[m_11] = rc;
+    }
+
+    pub fn scaling(self: *M3, x: f32, y: f32) void {
+        identity(self);
+        self[m_00] = x;
+        self[m_11] = y;
+    }
+
+    pub fn shearing(self: *M3, x: f32, y: f32) void {
+        identity(self);
+        self[m_10] = x;
+        self[m_01] = y;
+    }
+
+    pub fn orthoScreen(self: *M3, width: isize, height: isize) void {
+        identity(self);
+        // scale
+        self[m_00] = 2 / @intToFloat(f32, width);
+        self[m_11] = -2 / @intToFloat(f32, height);
+        // translate
+        self[m_20] = -1;
+        self[m_21] = 1;
+    }
+
+    // writes into first arg
+    pub fn mult(s: *M3, o: *M3) void {
+        var temp: M3 = undefined;
+        temp[m_00] = s[m_00] * o[m_00] + s[m_01] * o[m_10] + s[m_02] * o[m_20];
+        temp[m_01] = s[m_00] * o[m_01] + s[m_01] * o[m_11] + s[m_02] * o[m_21];
+        temp[m_02] = s[m_00] * o[m_02] + s[m_01] * o[m_12] + s[m_02] * o[m_22];
+        temp[m_10] = s[m_10] * o[m_00] + s[m_11] * o[m_10] + s[m_12] * o[m_20];
+        temp[m_11] = s[m_10] * o[m_01] + s[m_11] * o[m_11] + s[m_12] * o[m_21];
+        temp[m_12] = s[m_10] * o[m_02] + s[m_11] * o[m_12] + s[m_12] * o[m_22];
+        temp[m_20] = s[m_20] * o[m_00] + s[m_21] * o[m_10] + s[m_22] * o[m_20];
+        temp[m_21] = s[m_20] * o[m_01] + s[m_21] * o[m_11] + s[m_22] * o[m_21];
+        temp[m_22] = s[m_20] * o[m_02] + s[m_21] * o[m_12] + s[m_22] * o[m_22];
+        for (temp) |f, i| {
+            s[i] = f;
+        }
+    }
+};
+
+//;
+
 pub const texture = struct {
     const Result = struct {
         texture: c.GLuint,
@@ -12,7 +99,7 @@ pub const texture = struct {
         height: c_int,
     };
 
-    pub fn initFromMemory(buf: [*]u8, width: u32, height: u32) c.GLuint {
+    pub fn initFromMemory(buf: [*]const u8, width: u32, height: u32) c.GLuint {
         var tex: c.GLuint = undefined;
         c.glGenTextures(1, &tex);
         c.glBindTexture(c.GL_TEXTURE_2D, tex);
@@ -85,6 +172,8 @@ pub const Program = struct {
         \\ uniform mat3 _model;
         \\ uniform float _time;
         \\ uniform int _flip_uvs;
+        \\ uniform vec2 _vertex_offset;
+        \\ uniform int _use_spritebatch;
         \\ out vec2 _uv_coord;
         \\
         \\ // spritebatch
@@ -116,26 +205,28 @@ pub const Program = struct {
         \\
         \\     _sb_color = _ext_sb_color;
         \\     _sb_model = mat3_from_transform2d(_ext_sb_position.x,
-        \\     _ext_sb_position.y,
-        \\     _ext_sb_rotation,
-        \\     _ext_sb_scale.x,
-        \\     _ext_sb_scale.y);
+        \\                                       _ext_sb_position.y,
+        \\                                       _ext_sb_rotation,
+        \\                                       _ext_sb_scale.x,
+        \\                                       _ext_sb_scale.y);
         \\ }
     ;
 
     const vert_default_effect =
         \\ vec3 effect() {
-        \\    // return vec3(_ext_vertex, 1.0);
-        \\    ready_spritebatch();
-        \\    return _screen * _view * _model * _sb_model * vec3(_ext_vertex, 1.0);
-        \\    // return _screen * _view * _model * vec3(_ext_vertex, 1.0);
+        \\     if (_use_spritebatch != 0) {
+        \\         ready_spritebatch();
+        \\     } else {
+        \\         _sb_color = vec4(1, 1, 1, 1);
+        \\         _sb_model = mat3(1);
+        \\     }
+        \\     return _screen * _view * _model * _sb_model * vec3(_ext_vertex + _vertex_offset, 1.0);
         \\ }
     ;
 
     const vert_footer =
         \\ void main() {
         \\    _uv_coord = _flip_uvs != 0 ? vec2(_ext_uv.x, 1 - _ext_uv.y) : _ext_uv;
-        \\    // _tm = _time;
         \\    gl_Position = vec4(effect(), 1.0);
         \\ }
     ;
@@ -159,9 +250,7 @@ pub const Program = struct {
 
     const frag_default_effect =
         \\ vec4 effect() {
-        \\     // return vec4(1,1,1,1);
         \\     return _base_color * _sb_color * texture2D(_diffuse, _sb_uv);
-        \\     // return _base_color * texture2D(_diffuse, _uv_coord);
         \\ }
     ;
 
@@ -263,6 +352,8 @@ pub const Locations = struct {
     model: c.GLint,
     time: c.GLint,
     flip_uvs: c.GLint,
+    vertex_offset: c.GLint,
+    use_spritebatch: c.GLint,
     diffuse: c.GLint,
     base_color: c.GLint,
 
@@ -272,6 +363,8 @@ pub const Locations = struct {
         self.model = c.glGetUniformLocation(prog, "_model");
         self.time = c.glGetUniformLocation(prog, "_time");
         self.flip_uvs = c.glGetUniformLocation(prog, "_flip_uvs");
+        self.vertex_offset = c.glGetUniformLocation(prog, "_vertex_offset");
+        self.use_spritebatch = c.glGetUniformLocation(prog, "_use_spritebatch");
         self.diffuse = c.glGetUniformLocation(prog, "_diffuse");
         self.base_color = c.glGetUniformLocation(prog, "_base_color");
     }
@@ -280,18 +373,171 @@ pub const Locations = struct {
 var current_locations: *const Locations = undefined;
 
 pub fn bindProgram(prog: *const Program) void {
-    c.useProgram(prog.prog);
+    c.glUseProgram(prog.prog);
     current_locations = &prog.locations;
 }
 
-pub fn setBaseColor(color: [4]f32) void {
-    c.uniform4fv(current_locations.base_color, color);
+pub fn setScreen(mat3: *const [9]f32) void {
+    c.glUniformMatrix3fv(current_locations.screen, 1, c.GL_FALSE, mat3);
 }
 
-// TODO set time sceen view model, etc etc
+pub fn setView(mat3: *const [9]f32) void {
+    c.glUniformMatrix3fv(current_locations.view, 1, c.GL_FALSE, mat3);
+}
 
-var quad_vbo: c.GLuint = undefined;
-var quad_vao: c.GLuint = undefined;
+pub fn setModel(mat3: *const [9]f32) void {
+    c.glUniformMatrix3fv(current_locations.model, 1, c.GL_FALSE, mat3);
+}
+
+pub fn setTime(to: f32) void {
+    c.glUniform1f(current_locations.time, to);
+}
+
+pub fn setFlipUvs(to: bool) void {
+    c.glUniform1i(current_locations.flip_uvs, if (to) 1 else 0);
+}
+
+pub fn setVertexOffset(x: f32, y: f32) void {
+    c.glUniform2f(current_locations.vertex_offset, x, y);
+}
+
+pub fn setUseSpritebatch(to: bool) void {
+    c.glUniform1i(current_locations.use_spritebatch, if (to) 1 else 0);
+}
+
+pub fn setBaseColor(color: [4]f32) void {
+    c.glUniform4fv(current_locations.base_color, 1, &color);
+}
+
+pub fn setDiffuse(tex: c.GLuint) void {
+    c.glBindTexture(c.GL_TEXTURE_2D, tex);
+    c.glActiveTexture(c.GL_TEXTURE0);
+    c.glUniform1i(current_locations.diffuse, 0);
+}
+
+fn enableFloatAttrib(index: c.GLuint, size: c.GLint, stride: c.GLsizei, offset: usize) void {
+    c.glEnableVertexAttribArray(index);
+    c.glVertexAttribPointer(
+        index,
+        size,
+        c.GL_FLOAT,
+        c.GL_FALSE,
+        stride,
+        @intToPtr(*allowzero const anyopaque, offset),
+    );
+}
+
+pub const sb = struct {
+    const SPRITE_CT = 500;
+
+    const Sprite = extern struct {
+        uv: [4]f32,
+        position: [2]f32,
+        rotation: [1]f32,
+        scale: [2]f32,
+        color: [4]f32,
+    };
+
+    const verts = [16]f32{
+        1.0, 1.0, 1.0, 1.0,
+        0.0, 1.0, 0.0, 1.0,
+        1.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+    };
+
+    var vbo: c.GLuint = undefined;
+    var sprites_vbo: c.GLuint = undefined;
+    var vao: c.GLuint = undefined;
+
+    var sprites_buf: [SPRITE_CT]Sprite = undefined;
+    var sprites_idx: usize = 0;
+
+    pub fn init() void {
+        c.glGenBuffers(1, &vbo);
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, vbo);
+        c.glBufferData(
+            c.GL_ARRAY_BUFFER,
+            @sizeOf(@TypeOf(verts)),
+            &verts,
+            c.GL_STATIC_DRAW,
+        );
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, 0);
+
+        c.glGenBuffers(1, &sprites_vbo);
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, sprites_vbo);
+        c.glBufferData(
+            c.GL_ARRAY_BUFFER,
+            @sizeOf(@TypeOf(sprites_buf)),
+            &sprites_buf,
+            c.GL_STREAM_DRAW,
+        );
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, 0);
+
+        const stride = 4 * @sizeOf(f32);
+        const stride_sprites = @sizeOf(Sprite);
+
+        c.glGenVertexArrays(1, &vao);
+
+        c.glBindVertexArray(vao);
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, vbo);
+        enableFloatAttrib(0, 2, stride, 0);
+        enableFloatAttrib(1, 2, stride, 2 * @sizeOf(f32));
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, sprites_vbo);
+        enableFloatAttrib(2, 4, stride_sprites, @offsetOf(Sprite, "uv"));
+        c.glVertexAttribDivisor(2, 1);
+        enableFloatAttrib(3, 2, stride_sprites, @offsetOf(Sprite, "position"));
+        c.glVertexAttribDivisor(3, 1);
+        enableFloatAttrib(4, 1, stride_sprites, @offsetOf(Sprite, "rotation"));
+        c.glVertexAttribDivisor(4, 1);
+        enableFloatAttrib(5, 2, stride_sprites, @offsetOf(Sprite, "scale"));
+        c.glVertexAttribDivisor(5, 1);
+        enableFloatAttrib(6, 4, stride_sprites, @offsetOf(Sprite, "color"));
+        c.glVertexAttribDivisor(6, 1);
+        c.glBindVertexArray(0);
+    }
+
+    pub fn start() void {
+        sprites_idx = 0;
+    }
+
+    pub fn end() void {
+        if (sprites_idx > 0) {
+            draw();
+        }
+    }
+
+    pub fn draw() void {
+        c.glBindBuffer(c.GL_ARRAY_BUFFER, sprites_vbo);
+        c.glBufferSubData(
+            c.GL_ARRAY_BUFFER,
+            0,
+            @intCast(c_long, sprites_idx * @sizeOf(Sprite)),
+            &sprites_buf,
+        );
+        c.glBindVertexArray(vao);
+        c.glDrawArraysInstanced(c.GL_TRIANGLE_STRIP, 0, 4, @intCast(c_int, sprites_idx));
+        c.glBindVertexArray(0);
+        sprites_idx = 0;
+    }
+
+    pub fn advanceSprite() void {
+        sprites_idx += 1;
+        if (sprites_idx >= SPRITE_CT) {
+            draw();
+        }
+    }
+
+    pub fn currentSprite() *Sprite {
+        return &sprites_buf[sprites_idx];
+    }
+
+    pub fn drawOne() void {
+        c.glBindVertexArray(vao);
+        c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+        c.glBindVertexArray(0);
+    }
+};
+
 pub var window: *c.GLFWwindow = undefined;
 
 pub fn init() !void {
@@ -333,53 +579,10 @@ pub fn init() !void {
     c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
     c.glClearColor(0, 0, 0, 0);
 
-    const quad_verts = [16]f32{
-        1.0, 1.0, 1.0, 1.0,
-        0.0, 1.0, 0.0, 1.0,
-        1.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 0.0,
-    };
-
-    c.glGenBuffers(1, &quad_vbo);
-    c.glBindBuffer(c.GL_ARRAY_BUFFER, quad_vbo);
-    c.glBufferData(
-        c.GL_ARRAY_BUFFER,
-        @sizeOf(@TypeOf(quad_verts)),
-        &quad_verts,
-        c.GL_STATIC_DRAW,
-    );
-    c.glBindBuffer(c.GL_ARRAY_BUFFER, 0);
-
-    c.glGenVertexArrays(1, &quad_vao);
-    c.glBindVertexArray(quad_vao);
-    c.glBindBuffer(c.GL_ARRAY_BUFFER, quad_vbo);
-    c.glEnableVertexAttribArray(0);
-    c.glVertexAttribPointer(0, 2, c.GL_FLOAT, c.GL_FALSE, 0, null);
-    c.glEnableVertexAttribArray(1);
-    c.glVertexAttribPointer(
-        1,
-        2,
-        c.GL_FLOAT,
-        c.GL_FALSE,
-        0,
-        @intToPtr(*allowzero const anyopaque, 2 * @sizeOf(f32)),
-    );
-    c.glBindVertexArray(0);
-
-    //
+    sb.init();
 }
 
 pub fn deinit() void {
     c.glfwDestroyWindow(window);
     c.glfwTerminate();
 }
-
-pub fn drawQuad() void {
-    c.glBindVertexArray(quad_vao);
-    c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
-    c.glBindVertexArray(0);
-}
-
-pub fn initSpritebatch() void {}
-
-pub fn deinitSpritebatch() void {}
