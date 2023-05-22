@@ -93,7 +93,7 @@ pub const m3 = struct {
 //;
 
 pub const texture = struct {
-    const Result = struct {
+    pub const Result = struct {
         texture: c.GLuint,
         width: c_int,
         height: c_int,
@@ -428,7 +428,7 @@ fn enableFloatAttrib(index: c.GLuint, size: c.GLint, stride: c.GLsizei, offset: 
 }
 
 pub const sb = struct {
-    const SPRITE_CT = 500;
+    const SPRITE_CT = 2000;
 
     const Sprite = extern struct {
         uv: [4]f32,
